@@ -1,359 +1,169 @@
 <?php
 
-
 namespace EasySwoole\ORM;
 
-use ArrayAccess;
-use EasySwoole\Mysqli\Client;
+use EasySwoole\DDL\Blueprint\Create\Column;
+use EasySwoole\DDL\Blueprint\Create\Table;
+use EasySwoole\DDL\Enum\DataType;
 use EasySwoole\Mysqli\QueryBuilder;
-use EasySwoole\ORM\Db\ClientInterface;
-use EasySwoole\ORM\Db\Cursor;
-use EasySwoole\ORM\Db\CursorInterface;
-use EasySwoole\ORM\Db\Result;
-use EasySwoole\ORM\Exception\Exception;
-use EasySwoole\ORM\Utility\PreProcess;
-use EasySwoole\ORM\Utility\Schema\Table;
-use EasySwoole\ORM\Utility\TableObjectGeneration;
-use JsonSerializable;
+use EasySwoole\ORM\Db\QueryResult;
+use EasySwoole\ORM\Exception\ExecuteFail;
+use EasySwoole\ORM\Exception\ModelError;
 
-/**
- * 抽象模型
- * Class AbstractMode
- * @package EasySwoole\ORM
- */
-abstract class AbstractModel implements ArrayAccess, JsonSerializable
+
+abstract class AbstractModel implements \ArrayAccess , \JsonSerializable
 {
-    /** @var Result */
-    private $lastQueryResult;
-    private $lastQuery;
-    /* 快速支持连贯操作 */
-    private $fields = "*";
-    private $limit  = NULL;
-    private $withTotalCount = FALSE;
-    private $order  = NULL;
-    private $where  = [];
-    private $join   = NULL;
-    private $group  = NULL;
-    private $alias  = NULL;
-    /** @var string 表名 */
-    protected $tableName = '';
-    /** @var Table */
-    private static $schemaInfoList;
-    /**
-     * 当前连接驱动类的名称
-     * 继承后可以覆盖该成员以指定默认的驱动类
-     * @var string
-     */
-    protected $connectionName = 'default';
-    /*
-     * 临时设定的链接
-     */
-    private $tempConnectionName = null;
-    /**
-     * 当前的数据
-     * @var array
-     */
-    private $data = [];
-    /**
-     * 附加数据
-     * @var array
-     */
-    private $_joinData = [];
-    /**
-     * 模型的原始数据
-     * 未应用修改器和获取器之前的原始数据
-     * @var array
-     */
-    private $originData;
-    /* 回调事件 */
-    private $onQuery;
-    /** @var string 临时表名 */
-    private $tempTableName = null;
-    /**
-     * @var ClientInterface
-     */
-    private $client;
+    /** @var RuntimeConfig */
+    private $runtimeConfig;
+    /** @var null|array */
+    private $__data = null;
+    /** @var QueryResult|null */
+    private $__lastQueryResult;
 
-    /** @var bool|string 是否开启时间戳 */
-    protected  $autoTimeStamp = false;
-    /** @var bool|string 创建时间字段名 false不设置 */
-    protected  $createTime = 'create_time';
-    /** @var bool|string 更新时间字段名 false不设置 */
-    protected  $updateTime = 'update_time';
-    /** @var array 预查询 */
-    private $with;
-    /** @var bool 是否为预查询 */
-    private $preHandleWith = false;
+    private $__preQueryData = [];
 
-    /**
-     * AbstractModel constructor.
-     * @param array $data
-     * @throws Exception
-     */
-    public function __construct(array $data = [])
+    abstract function tableName():string;
+
+    function __construct(?array $data = null)
     {
-        $this->data($data);
-    }
-
-    public function setExecClient(?ClientInterface $client)
-    {
-        $this->client = $client;
-        return $this;
-    }
-
-
-    /**
-     * @param bool $isCache
-     * @return Table
-     * @throws Exception
-     */
-    public function schemaInfo(bool $isCache = true): Table
-    {
-        $key = md5(static::class);
-        if (isset(self::$schemaInfoList[$key]) && self::$schemaInfoList[$key] instanceof Table && $isCache == true) {
-            return self::$schemaInfoList[$key];
+        if(!empty($data)){
+            $this->data($data);
         }
-        if ($this->tempConnectionName) {
-            $connectionName = $this->tempConnectionName;
-        } else {
-            $connectionName = $this->connectionName;
-        }
-        if(empty($this->tableName)){
-            throw new Exception("Table name is require for model ".static::class);
-        }
-        $tableObjectGeneration = new TableObjectGeneration(DbManager::getInstance()->getConnection($connectionName), $this->tableName);
-        $schemaInfo = $tableObjectGeneration->generationTable();
-        self::$schemaInfoList[$key] = $schemaInfo;
-        return self::$schemaInfoList[$key];
     }
 
-
-    /*  ==============    回调事件    ==================   */
-    public function onQuery(callable $call)
+    public static function create(?array $data = null):AbstractModel
     {
-        $this->onQuery = $call;
-        return $this;
+        return new static($data);
     }
 
-    /**
-     * 调用事件
-     * @param $eventName
-     * @param array $param
-     * @return bool|mixed
-     */
-    protected function callEvent($eventName, ...$param)
+    public function data(array $data, $setter = true)
     {
-        if(method_exists(static::class, $eventName)){
-            return call_user_func([static::class, $eventName], $this, ...$param);
-        }
-        return true;
-    }
-
-    /*  ==============    快速支持连贯操作    ==================   */
-    /**
-     * @param mixed ...$args
-     * @return AbstractModel
-     */
-    public function order(...$args)
-    {
-        $this->order[] = $args;
-        return $this;
-    }
-    /**
-     * @param int $one
-     * @param int|null $two
-     * @return $this
-     */
-    public function limit(int $one, ?int $two = null)
-    {
-        if ($two !== null) {
-            $this->limit = [$one, $two];
-        } else {
-            $this->limit = $one;
-        }
-        return $this;
-    }
-    /**
-     * @param $fields
-     * @return $this
-     */
-    public function field($fields)
-    {
-        if (!is_array($fields)) {
-            $fields = [$fields];
-        }
-        $this->fields = $fields;
-        return $this;
-    }
-    /**
-     * @return $this
-     */
-    public function withTotalCount()
-    {
-        $this->withTotalCount = true;
-        return $this;
-    }
-    /**
-     * @param $where
-     * @return $this
-     */
-    public function where(...$where)
-    {
-        $this->where[] = $where;
-        return $this;
-    }
-    /**
-     * @param string $group
-     * @return $this
-     */
-    public function group(string $group)
-    {
-        $this->group = $group;
-        return $this;
-    }
-    /**
-     * @param $joinTable
-     * @param $joinCondition
-     * @param string $joinType
-     * @return $this
-     */
-    public function join($joinTable, $joinCondition, $joinType = '')
-    {
-        $this->join[] = [$joinTable, $joinCondition, $joinType];
-        return $this;
-    }
-
-    public function alias($alias)
-    {
-        $this->alias = $alias;
-        return $this;
-    }
-
-    public function with($with){
-        if (is_string($with)){
-            $this->with = explode(',', $with);
-        } else if (is_array($with)){
-            $this->with = $with;
+        foreach ($data as $key => $value) {
+            $this->setAttr($key, $value, $setter);
         }
         return $this;
     }
 
-    /**
-     * 获取表名，如果有设置临时表名则返回临时表名
-     * @throws
-     */
-    public function getTableName()
+    function runtimeConfig(?RuntimeConfig $config = null):RuntimeConfig
     {
-        if($this->tempTableName !== null){
-            return $this->tempTableName;
-        }else{
-           return $this->schemaInfo()->getTable();
-        }
-    }
-
-    /**
-     * @param string $name
-     * @param bool $is_temp
-     * @return $this
-     * @throws Exception
-     */
-    public function tableName(string $name, bool $is_temp = false)
-    {
-        if ($is_temp){
-            $this->tempTableName = $name;
-        }else{
-            if($name != $this->tableName){
-                $this->tableName = $name;
-                $this->schemaInfo(false);
+        if($config == null){
+            if($this->runtimeConfig == null){
+                $this->runtimeConfig = new RuntimeConfig();
             }
+        }else{
+            $this->runtimeConfig = $config;
         }
-        return $this;
+        return $this->runtimeConfig;
     }
 
-    private function parseTableName()
+    function lastQueryResult():?QueryResult
     {
-        $table = $this->getTableName();
-        if ($this->alias !== NULL){
-            $table .= " AS `{$this->alias}`";
+        return $this->__lastQueryResult;
+    }
+
+    function schemaInfo():Table
+    {
+        $key = $this->__modelhash();
+        $item = RuntimeCache::getInstance()->get($key);
+        if($item){
+            return $item;
         }
+        $client = $this->runtimeConfig()->getClient();
+        $query = new QueryBuilder();
+        $query->raw("show full columns from {$this->tableName()}");
+
+        $fields = DbManager::getInstance()
+            ->__exec($client,$query,false,$this->runtimeConfig()->getConnectionConfig()->getTimeout())
+            ->getResult();
+        $table = new Table($this->tableName());
+
+        foreach ($fields as $field){
+            //创建字段与类型处理
+            $columnTypeArr = explode(' ',$field['Type']);
+            $tmpIndex = strpos($columnTypeArr[0],'(');
+            //例如  varchar(20)
+            if($tmpIndex !== false){
+                $type = substr($columnTypeArr[0],0,$tmpIndex);
+                $limit = substr($columnTypeArr[0],$tmpIndex+1,strpos($columnTypeArr[0],')')-$tmpIndex-1);
+                $columnObj = new Column($field['Field'],$type);
+                $limitArr = explode(',',$limit);
+                if (isset($limitArr[1])){
+                    $columnObj->setColumnLimit($limitArr);
+                }else{
+                    $columnObj->setColumnLimit($limitArr[0]);
+                }
+            }else{
+                $type = $columnTypeArr[0];
+                $columnObj = new Column($field['Field'],$type);
+            }
+            if (in_array('unsigned',$columnTypeArr)){
+                $columnObj->setIsUnsigned();
+            }
+            if ($field['Key']=='PRI'){
+                $columnObj->setIsPrimaryKey();
+            }
+            //默认值
+            if ($field['Default']!==null){
+                $columnObj->setDefaultValue($field['Default']);
+            }else{
+                $columnObj->setDefaultValue(null);
+            }
+            if ($field['Extra']=='auto_increment'){
+                $columnObj->setIsAutoIncrement();
+            }
+            if (!empty($field['Comment'])){
+                $columnObj->setColumnComment($field['Comment']);
+            }
+            $table->addColumn($columnObj);
+        }
+
+        RuntimeCache::getInstance()->set($key,$table);
+
         return $table;
     }
 
-    /*  ==============    聚合查询    ==================   */
-
-    /**
-     * @param $field
-     * @return null
-     * @throws Exception
-     * @throws \Throwable
-     */
-    public function max($field)
+    public function offsetExists($offset): bool
     {
-        return $this->queryPolymerization('max', $field);
+        return $this->__isset($offset);
     }
 
-    /**
-     * @param $field
-     * @return null
-     * @throws Exception
-     * @throws \Throwable
-     */
-    public function min($field)
+    public function offsetGet($offset)
     {
-        return $this->queryPolymerization('min', $field);
+        return $this->getAttr($offset);
     }
 
-    /**
-     * @param null $field
-     * @return null
-     * @throws Exception
-     * @throws \Throwable
-     */
-    public function count($field = null)
+    public function offsetSet($offset, $value)
     {
-        return (int)$this->queryPolymerization('count', $field);
+        return $this->setAttr($offset, $value);
     }
 
-    /**
-     * @param $field
-     * @return null
-     * @throws Exception
-     * @throws \Throwable
-     */
-    public function avg($field)
+    public function offsetUnset($offset)
     {
-        return $this->queryPolymerization('avg', $field);
+        return $this->setAttr($offset, null);
     }
 
-    /**
-     * @param $field
-     * @return null
-     * @throws Exception
-     * @throws \Throwable
-     */
-    public function sum($field)
-    {
-        return $this->queryPolymerization('sum', $field);
-    }
 
-    /*  ==============    Builder 和 Result    ==================   */
-    public function lastQueryResult(): ?Result
+    function __set($name, $value)
     {
-        return $this->lastQueryResult;
-    }
-    public function lastQuery(): ?QueryBuilder
-    {
-        return $this->lastQuery;
-    }
-
-    function connection(string $name, bool $isTemp = false): AbstractModel
-    {
-        if ($isTemp) {
-            $this->tempConnectionName = $name;
-        } else {
-            $this->connectionName = $name;
+        //访问的时候，恢复ddl定义的默认值
+        if($this->__data === null){
+            $this->__data = $this->__tableArray();
         }
-        return $this;
+        $this->setAttr($name, $value);
+    }
+
+    function __get($name)
+    {
+        //访问的时候，恢复ddl定义的默认值
+        if($this->__data === null){
+            $this->__data = $this->__tableArray();
+        }
+        return $this->getAttr($name);
+    }
+
+    public function __isset($name)
+    {
+        return ($this->getAttr($name) !== null);
     }
 
     public function getAttr($attrName)
@@ -366,1053 +176,344 @@ abstract class AbstractModel implements ArrayAccess, JsonSerializable
         if (method_exists($this, $attrName)) {
             return $this->$attrName();
         }
-        // 是否是附加字段
-        if (isset($this->_joinData[$attrName])){
-            return $this->_joinData[$attrName];
-        }
-        return $this->data[$attrName] ?? null;
+
+        return $this->__data[$attrName] ?? null;
     }
 
-    /**
-     * @param $attrName
-     * @param $attrValue
-     * @param bool $setter
-     * @return bool
-     * @throws Exception
-     */
     public function setAttr($attrName, $attrValue, $setter = true): bool
     {
         if (isset($this->schemaInfo()->getColumns()[$attrName])) {
+            /** @var Column $col */
             $col = $this->schemaInfo()->getColumns()[$attrName];
-            $attrValue = PreProcess::dataValueFormat($attrValue, $col);
+            if(DataType::typeIsTextual($col->getColumnType())){
+                $attrValue = strval($attrValue);
+            }
             $method = 'set' . str_replace( ' ', '', ucwords( str_replace( ['-', '_'], ' ', $attrName ) ) ) . 'Attr';
             if ($setter && method_exists($this, $method)) {
-                $attrValue = $this->$method($attrValue, $this->data);
+                $attrValue = $this->$method($attrValue, $this->__data);
             }
-            $this->data[$attrName] = $attrValue;
+            $this->__data[$attrName] = $attrValue;
             return true;
         } else {
-            $this->_joinData[$attrName] = $attrValue;
             return false;
         }
     }
 
-    /**
-     * 数据赋值
-     * @param array $data
-     * @param bool $setter 是否调用setter
-     * @return $this
-     * @throws Exception
-     */
-    public function data(array $data, $setter = true)
+    public function where(...$args)
     {
-        foreach ($data as $key => $value) {
-            $this->setAttr($key, $value, $setter);
-        }
-        $this->originData = $this->data;
+        $this->runtimeConfig()->where($args);
         return $this;
     }
 
-    /**
-     * @param null $where
-     * @param bool $allow 是否允许没有主键删除
-     * @return int|bool
-     * @throws Exception
-     * @throws \Throwable
-     */
-    public function destroy($where = null, $allow = false)
+    public function join($joinTable, $joinCondition, $joinType = '')
     {
+        $this->runtimeConfig()->join([
+            $joinTable,$joinCondition,$joinType
+        ]);
+        return $this;
+    }
+
+    public function order(...$args)
+    {
+        $this->runtimeConfig()->order($args);
+        return $this;
+    }
+
+    public function limit(int $one, ?int $two = null)
+    {
+        $this->runtimeConfig()->limit($one,$two);
+        return $this;
+    }
+
+    public function field($fields)
+    {
+        $this->runtimeConfig()->field($fields);
+        return $this;
+    }
+
+    public function groupBy($filed)
+    {
+        $this->runtimeConfig()->groupBy($filed);
+        return $this;
+    }
+
+    public function withTotalCount()
+    {
+        $this->runtimeConfig()->withTotalCount();
+        return $this;
+    }
+
+    public function findOne($pkVal = null):?AbstractModel
+    {
+        if($pkVal !== null){
+            $pkName = $this->__tablePk();
+            $this->where($pkName,$pkVal);
+        }
+        $this->limit(1);
+        $builder = $this->__makeBuilder();
+        $builder->get($this->tableName());
+        $data = $this->__exec($builder);
+        if($data){
+            return new static($data[0]);
+        }
+        return null;
+    }
+
+    protected function mapOne(string $targetModelClass,$targetModeWhereCol,?string $currentModeWhereCol = null,string $joinType = "left")
+    {
+        $target = new \ReflectionClass($targetModelClass);
+        if(!$target->isSubclassOf(AbstractModel::class)){
+            throw new ExecuteFail("{$targetModelClass} not a subclass of ".AbstractModel::class);
+        }
+        if($currentModeWhereCol === null){
+            $currentModeWhereCol = $this->__tablePk();
+        }
+        /** @var AbstractModel $target */
+        $target = $target->newInstance();
         $builder = new QueryBuilder();
-        $primaryKey = $this->schemaInfo()->getPkFiledName();
+        $preData = $this->runtimeConfig()->getPreQueryData();
+        if(!empty($preData)){
+            $target->data($preData[$targetModelClass]);
+            return $target;
+        }
 
-        if (is_null($where) && $allow == false) {
-            if (empty($primaryKey)) {
-                throw new Exception('Table not have primary key, so can\'t use Model::destroy($pk)');
-            } else {
-                $whereVal = $this->getAttr($primaryKey);
-                if (empty($whereVal)) {
-                    if (empty($this->where)){
-                        throw new Exception('Table not have primary value');
-                    }
-                }else{
-                    $builder->where($primaryKey, $whereVal);
-                }
+        if($this->runtimeConfig()->getPreQuery()){
+            //说明已经执行了预查询
+            if(isset($this->__preQueryData[$targetModelClass])){
+                $whereVal = $this->getAttr($currentModeWhereCol);
+                $data = $this->__preQueryData[$targetModelClass][$whereVal];
+                $target->data($data);
+                return $target;
             }
-        }
-
-        PreProcess::mappingWhere($builder, $where, $this);
-        $this->preHandleQueryBuilder($builder);
-        $builder->delete($this->getTableName(), $this->limit);
-
-        // beforeDelete事件
-        $beforeRes = $this->callEvent('onBeforeDelete');
-        if ($beforeRes === false){
-            $this->callEvent('onAfterDelete', false);
-            return false;
-        }
-
-        $this->query($builder);
-        //  是否出错
-        if ($this->lastQueryResult()->getResult() === false) {
-            $this->callEvent('onAfterDelete', false);
-            return false;
-        }
-
-        $this->callEvent('onAfterDelete', $this->lastQueryResult()->getAffectedRows());
-        return $this->lastQueryResult()->getAffectedRows();
-    }
-
-    /**
-     * 保存 插入
-     * @param bool $notNul
-     * @param bool $strict
-     * @throws Exception
-     * @throws \Throwable
-     * @return bool|int
-     */
-    public function save($notNul = false, $strict = true)
-    {
-        $builder = new QueryBuilder();
-        $primaryKey = $this->schemaInfo()->getPkFiledName();
-        if (empty($primaryKey)) {
-            throw new Exception('save() needs primaryKey for model ' . static::class);
-        }
-        $rawArray = $this->toArray($notNul, $strict);
-        // 合并时间戳字段
-        $rawArray = $this->preHandleTimeStamp($rawArray, 'insert');
-        $builder->insert($this->getTableName(), $rawArray);
-        $this->preHandleQueryBuilder($builder);
-        // beforeInsert事件
-        $beforeRes = $this->callEvent('onBeforeInsert');
-        if ($beforeRes === false){
-            $this->callEvent('onAfterInsert', false);
-            return false;
-        }
-
-        $this->query($builder);
-        if ($this->lastQueryResult()->getResult() === false) {
-            $this->callEvent('onAfterInsert', false);
-            return false;
-        }
-
-        $this->callEvent('onAfterInsert', true);
-        if ($this->lastQueryResult()->getLastInsertId()) {
-            $this->data[$primaryKey] = $this->lastQueryResult()->getLastInsertId();
-            $this->originData = $this->data;
-            return $this->lastQueryResult()->getLastInsertId();
-        }
-        return true;
-    }
-
-    /**
-     * @param $data
-     * @param bool $replace
-     * @param bool $transaction 是否开启事务
-     * @return array
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \Throwable
-     */
-    public function saveAll($data, $replace = true, $transaction = true)
-    {
-        $pk = $this->schemaInfo()->getPkFiledName();
-        if (empty($pk)) {
-            throw new Exception('saveAll() needs primaryKey for model ' . static::class);
-        }
-
-        if ($this->tempConnectionName) {
-            $connectionName = $this->tempConnectionName;
-        } else {
-            $connectionName = $this->connectionName;
-        }
-
-        // 开启事务
-        if ($transaction){
-            DbManager::getInstance()->startTransaction($connectionName);
-        }
-
-        $result = [];
-        try{
-            foreach ($data as $key => $row){
-                // 如果有设置更新
-                if ($replace && isset($row[$pk])){
-                    $model = static::create()->connection($connectionName)->get($row[$pk]);
-                    unset($row[$pk]);
-                    $model->update($row);
-                    $result[$key] = $model;
-                }else{
-                    $model = static::create($row)->connection($connectionName);
-                    $res = $model->save();
-                    $result[$key] = $model;
-                }
+            //没有执行过，则构建执行
+            //构建ids
+            $ids = [];
+            foreach ($this->lastQueryResult()->getResult() as $item){
+                $ids[] = $item[$currentModeWhereCol];
             }
-            if($transaction){
-                DbManager::getInstance()->commit($connectionName);
+
+            // TODO  还没有处理别名
+            $builder->join($this->tableName(),"{$target->tableName()}.{$targetModeWhereCol} = {$this->tableName()}.{$currentModeWhereCol}",$joinType);
+            $builder->where("{$this->tableName()}.{$currentModeWhereCol}",$ids,"IN");
+            $builder->limit($this->runtimeConfig()->getPreQuery()[1])->get($target->tableName());
+            //返回以父类定义的where key的结果集
+            $list = [];
+            $data =  $this->__exec($builder,false);
+            foreach ($data as $item){
+                $list[$item[$targetModeWhereCol]] = $item;
             }
-            return $result;
-        } catch (\EasySwoole\Mysqli\Exception\Exception $e) {
-
-            if($transaction) {
-                DbManager::getInstance()->rollback($connectionName);
-            }
-            throw $e;
-        } catch (\Throwable $e) {
-            if($transaction) {
-                DbManager::getInstance()->rollback($connectionName);
-            }
-            throw $e;
-        }
-
-    }
-
-    /**
-     * 获取数据
-     * @param null $where
-     * @param bool $returnAsArray
-     * @return $this|null|array|bool
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \Throwable
-     */
-    public function get($where = null, bool $returnAsArray = false)
-    {
-        $builder = new QueryBuilder;
-        $builder = PreProcess::mappingWhere($builder, $where, $this);
-        $this->preHandleQueryBuilder($builder);
-        $builder->getOne($this->parseTableName(), $this->fields);
-        $res = $this->query($builder);
-
-        if (empty($res)) {
-            if ($res === false){
-                return false;
-            }
-            return null;
-        }
-        
-        if ($res instanceof CursorInterface){
-            $res->setModelName(static::class);
-            $res->setReturnAsArray($returnAsArray);
-            return $res;
-        }
-        
-        if ($returnAsArray){
-            return $res[0];
-        }
-        $model = new static();
-
-        $model->data($res[0], false);
-        $model->lastQuery = $model->lastQuery();
-        // 预查询
-        if (!empty($model->with)){
-            $model->preHandleWith($model);
-        }
-        return $model;
-    }
-
-
-    /**
-     * 批量查询
-     * @param null $where
-     * @param bool $returnAsArray
-     * @return array|bool|Cursor
-     * @throws Exception
-     * @throws \Throwable
-     */
-    public function all($where = null, bool $returnAsArray = false)
-    {
-        $builder = new QueryBuilder;
-        $builder = PreProcess::mappingWhere($builder, $where, $this);
-        $this->preHandleQueryBuilder($builder);
-        $builder->get($this->parseTableName(), $this->limit, $this->fields);
-        $results = $this->query($builder);
-        $resultSet = [];
-        if ($results === false){
-            return false;
-        }
-        if ($results instanceof CursorInterface){
-            $results->setModelName(static::class);
-            $results->setReturnAsArray($returnAsArray);
-            return $results;
-        }
-        if (is_array($results)) {
-            foreach ($results as $result) {
-                if ($returnAsArray) {
-                    $resultSet[] = $result;
-                } else {
-                    $resultSet[] = (new static)->connection($this->connectionName)->data($result, false);
-                }
-            }
-            if (!$returnAsArray && !empty($this->with)){
-                $resultSet = $this->preHandleWith($resultSet);
-            }
-        }
-        return $resultSet;
-    }
-
-    /**
-     * 批量查询 不映射对象  返回数组
-     * @param null $where
-     * @return array|bool|Cursor
-     * @throws Exception
-     * @throws \Throwable
-     */
-    public function select($where = null)
-    {
-        return $this->all($where, true);
-    }
-
-    /**
-     * @param null $where
-     * @return array
-     * @throws Exception
-     * @throws \Throwable
-     */
-    public function findAll($where = null):array
-    {
-        return $this->select($where);
-    }
-
-    /**
-     * @param null $where
-     * @return array|AbstractModel|null
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \Throwable
-     */
-    public function findOne($where = null)
-    {
-        return $this->get($where, true);
-    }
-
-    /**
-     * @param string $column
-     * @return array|null
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \Throwable
-     */
-    public function column(?string $column = null): ?array
-    {
-        if (!is_null($column)) {
-            $this->fields = [$column];
-        }
-        $this->all();
-
-        return $this->lastQueryResult->getResultColumn($column);
-    }
-
-    /**
-     * @param string $column
-     * @return mixed
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \Throwable
-     */
-    public function scalar(?string $column = null)
-    {
-        if (!is_null($column)) {
-            $this->fields = [$column];
-        }
-        $this->limit = 1;
-        $this->all();
-
-        return $this->lastQueryResult->getResultScalar($column);
-    }
-
-    /**
-     * @param string $column
-     * @return array|null
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \Throwable
-     */
-    public function indexBy(string $column): ?array
-    {
-        $this->all();
-
-        return $this->lastQueryResult->getResultIndexBy($column);
-    }
-
-    /**
-     * 直接返回某一行的某一列
-     * @param $column
-     * @return mixed|null
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \Throwable
-     */
-    public function val($column)
-    {
-        $data = $this->findOne();
-        return isset($data[$column]) ? $data[$column] : null;
-    }
-
-    /**
-     * @param array $data
-     * @return AbstractModel|$this
-     * @throws Exception
-     */
-    public static function create(array $data = []): AbstractModel
-    {
-        return new static($data);
-    }
-
-    /**
-     * @param ClientInterface|Client $client
-     * @param array $data
-     * @return AbstractModel|$this
-     * @throws Exception
-     */
-    public static function invoke(ClientInterface $client,array $data = []): AbstractModel
-    {
-        return (static::create($data))->setExecClient($client);
-    }
-
-
-    /**
-     * 更新
-     * @param array $data
-     * @param null $where
-     * @param bool $allow 是否允许无条件更新
-     * @return bool
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \Throwable
-     */
-    public function update(array $data = [], $where = null, $allow = false)
-    {
-        if (!empty($data)) {
-            foreach ($data as $columnKey => $columnValue){
-                $this->setAttr($columnKey, $columnValue);
-            }
-        }
-
-        $attachData = [];
-        // 遍历属性，把inc 和dec 的属性先处理
-        foreach ($this->data as $tem_key => $tem_data){
-            if (is_array($tem_data)){
-                if (isset($tem_data["[I]"])){
-                    $attachData[$tem_key] = $tem_data;
-                    unset($this->data[$tem_key]);
-                }
-            }
-        }
-
-        $data = array_diff_assoc($this->data, $this->originData);
-        $data = array_merge($data, $attachData);
-
-        if (empty($data)){
-            $this->originData = $this->data;
-            return true;
-        }
-
-        $builder = new QueryBuilder();
-        if ($where) {
-            PreProcess::mappingWhere($builder, $where, $this);
-        } else if (!$allow) {
-            $pk = $this->schemaInfo()->getPkFiledName();
-            if (isset($this->data[$pk])) {
-                $pkVal = $this->data[$pk];
-                $builder->where($pk, $pkVal);
-            } else {
-                if (empty($this->where)){
-                    throw new Exception("update error,pkValue is require");
-                }
-            }
-        }
-        $this->preHandleQueryBuilder($builder);
-        // 合并时间戳字段
-        $data = $this->preHandleTimeStamp($data, 'update');
-        $builder->update($this->getTableName(), $data);
-
-        // beforeUpdate事件
-        $beforeRes = $this->callEvent('onBeforeUpdate');
-        if ($beforeRes === false){
-            $this->callEvent('onAfterUpdate', false);
-            return false;
-        }
-
-        $results = $this->query($builder);
-        if ($results){
-            $this->originData = $this->data;
-            $this->callEvent('onAfterUpdate', true);
+            return [
+                "model"=>$targetModelClass,
+                "dataList"=>$list,
+                'parentCol'=>$currentModeWhereCol
+            ];
         }else{
-            $this->callEvent('onAfterUpdate', false);
+            $whereVal = $this->getAttr($currentModeWhereCol);
+            $builder->where($targetModeWhereCol,$whereVal)->limit(2)->get($target->tableName());
+            $data = $this->__exec($builder,false);
+            if(!empty($data)){
+                //如果存在两条记录，说明关联关系或者是数据库存储有问题
+                if(count($data) > 1){
+                    throw new ModelError(static::class." mapOne() to {$targetModelClass} relation error,more than one record match");
+                }else{
+                    $target->data($data[0]);
+                    return $target;
+                }
+            }
+        }
+        return null;
+    }
+
+    public function all(?array $ids = null,?string $idsCol = null):array
+    {
+        $builder = $this->__makeBuilder();
+        if($ids != null){
+            if($idsCol == null){
+                $idsCol = $this->__tablePk();
+            }
+            $builder->where($idsCol,$ids,"in");
         }
 
-        return $results ? true : false;
+        $builder->get($this->tableName());
+
+        $data = $this->__exec($builder);
+
+        $rawWithResult = [];
+        if($this->runtimeConfig()->getPreQuery()){
+            //清空上次的执行结果
+            $info = $this->runtimeConfig()->getPreQuery();
+            $withCols = $info[0];
+            foreach ($withCols as $col){
+                $rawWithResult[] = call_user_func([$this,$col]);
+            }
+        }
+
+        $list = [];
+
+        foreach ($data as $item){
+            $temp = new static();
+            $temp->data($item);
+            $tempArr = [];
+            foreach ($rawWithResult as $withColResult){
+                $keyVal = $this->__data[$withColResult['parentCol']];
+                $tempArr[$withColResult['model']] = $withColResult['dataList'][$keyVal];
+            }
+            $temp->runtimeConfig()->setPreQueryData($tempArr);
+            $list[] = $temp;
+        }
+
+        $this->resetStatusRuntimeStatus();
+
+        return $list;
     }
 
-    /**
-     * ArrayAccess Exists
-     * @param mixed $offset
-     * @return bool
-     */
-    public function offsetExists($offset)
+    public function save():bool
     {
-        return $this->__isset($offset);
+        $this->resetStatusRuntimeStatus();
     }
 
-    public function offsetGet($offset)
+    public function update(array $data = [],bool $saveMode = true)
     {
-        return $this->getAttr($offset);
+        //$saveMode 是否允许无条件update
+        $this->resetStatusRuntimeStatus();
     }
 
-    /**
-     * @param mixed $offset
-     * @param mixed $value
-     * @return bool
-     * @throws Exception
-     */
-    public function offsetSet($offset, $value)
+    public function preQuery(array $col,?int $limit = 65535):AbstractModel
     {
-        return $this->setAttr($offset, $value);
+        $this->runtimeConfig()->setPreQuery([
+            $col,$limit
+        ]);
+        return $this;
     }
 
-
-    /**
-     * @param mixed $offset
-     * @return bool
-     * @throws Exception
-     */
-    public function offsetUnset($offset)
-    {
-        return $this->setAttr($offset, null);
-    }
-
-    /**
-     * json序列化方法
-     * @return array|mixed
-     */
     public function jsonSerialize()
     {
-        $return = [];
-        foreach ($this->data as $key => $data){
-            if (method_exists($this, $key)){
-                $return[$key] = $this->data[$key];
-            }else{
-                $return[$key] = $this->getAttr($key);
-            }
-        }
-        foreach ($this->_joinData as $key => $data)
-        {
-            $return[$key] = $data;
-        }
-        return $return;
+
     }
 
-    public function toArray($notNul = false, $strict = true): array
+    public function toArray(?array $callMethods = null):array
     {
-        $temp = $this->data ?? [];
-        if ($notNul) {
-            foreach ($temp as $key => $value) {
-                if ($value === null) {
-                    unset($temp[$key]);
-                }
-            }
-            if (!$strict) {
-                $temp = array_merge($temp, $this->_joinData ?? []);
-            }
-            return $temp;
+        $data = $this->__tableArray();
+        foreach ($data as $key => $val){
+            $val = $this->getAttr($key);
+            $data[$key] = $val;
         }
-        if (is_array($this->fields)) {
-            foreach ($temp as $key => $value) {
-                if (in_array($key, $this->fields)) {
-                    unset($temp[$key]);
+        if($callMethods == null){
+            $callMethods = [];
+        }
+        foreach ($callMethods as $callMethod){
+            if(method_exists($this,$callMethod)){
+                $res = call_user_func([$this,$callMethod]);
+                if(is_array($res)){
+                    $data = $data + $res;
+                }elseif($res instanceof AbstractModel){
+                    $data = $data + $res->toArray($callMethods);
                 }
             }
         }
-        if (!$strict) {
-            $temp = array_merge($temp, $this->_joinData ?? []);
+
+        return $data;
+    }
+
+    function toRawArray():array
+    {
+        return $this->__data;
+    }
+
+
+    private function resetStatusRuntimeStatus()
+    {
+        $this->runtimeConfig()->reset();
+    }
+
+
+    private function __tableArray():array
+    {
+        $key = "tableArray".$this->__modelhash();
+        $ret = RuntimeCache::getInstance()->get($key);
+        if(is_array($ret)){
+            return $ret;
         }
-        return $temp;
+        $table = $this->schemaInfo();
+        $data = $table->getColumns();
+        $list = [];
+        /** @var Column $col */
+        foreach ($data as $col){
+            $list[$col->getColumnName()] = $col->getDefaultValue();
+        }
+        RuntimeCache::getInstance()->set($key,$list);
+        return $list;
     }
 
-    public function __toString()
+    function __tablePk():?string
     {
-        $data = array_merge($this->data, $this->_joinData ?? []);
-        return json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $key = "tablePk".$this->__modelhash();
+        $ret = RuntimeCache::getInstance()->get($key);
+        if($ret){
+            return $ret;
+        }
+
+        $keyCol = null;
+        $table = $this->schemaInfo();
+        /** @var Column $column */
+        foreach ($table->getColumns() as $column){
+            if($column->getIsPrimaryKey()){
+                $keyCol = $column->getColumnName();
+                RuntimeCache::getInstance()->set($key,$keyCol);
+                break;
+            }
+        }
+        if($keyCol == null){
+            throw new ExecuteFail("table: {$this->tableName()} have no primary key");
+        }
+
+        return $keyCol;
     }
 
-    /**
-     * @param $name
-     * @param $value
-     * @throws Exception
-     */
-    function __set($name, $value)
+    private function __modelHash():string
     {
-        $this->setAttr($name, $value);
+        $key = md5(static::class.$this->tableName().$this->runtimeConfig()->getConnectionConfig()->getName());
+        return substr($key,8,16);
     }
 
-    function __get($name)
+    private function __exec(QueryBuilder $builder,bool $resetQueryResult = true)
     {
-        return $this->getAttr($name);
+        $client = $this->runtimeConfig()->getClient();
+
+        if($resetQueryResult){
+            $this->__lastQueryResult = DbManager::getInstance()
+                ->__exec($client,$builder,false,$this->runtimeConfig()->getConnectionConfig()->getTimeout());
+
+            return $this->__lastQueryResult->getResult();
+        }else{
+            return DbManager::getInstance()
+                ->__exec($client,$builder,false,$this->runtimeConfig()->getConnectionConfig()->getTimeout())->getResult();
+        }
     }
 
-    public function __isset($name)
+    private function __makeBuilder():QueryBuilder
     {
-        return ($this->getAttr($name) !== null);
-    }
-
-    /**
-     * @param callable $call
-     * @return mixed
-     * @throws \Throwable
-     */
-    function func(callable $call)
-    {
+        //构建query builder
         $builder = new QueryBuilder();
-        $isRaw = (bool)call_user_func($call,$builder);
-        return $this->query($builder,$isRaw);
-    }
-
-    private function reset()
-    {
-        $this->tempConnectionName = null;
-        $this->fields = "*";
-        $this->limit  = null;
-        $this->withTotalCount = false;
-        $this->order  = null;
-        $this->where  = [];
-        $this->join   = null;
-        $this->group  = null;
-        $this->alias  = null;
-        $this->tempTableName = null;
-    }
-
-    /**
-     * @param string        $class
-     * @param callable|null $where
-     * @param null          $pk
-     * @param null          $joinPk
-     * @param string        $joinType
-     * @return mixed|null
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \ReflectionException
-     * @throws \Throwable
-     */
-    protected function hasOne(string $class, callable $where = null, $pk = null, $joinPk = null, $joinType = '')
-    {
-        if ($this->preHandleWith === true){
-            return [$class, $where, $pk, $joinPk, $joinType, 'hasOne'];
-        }
-
-        $fileName = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2)[1]['function'];
-        if (isset($this->_joinData[$fileName])) {
-            return $this->_joinData[$fileName];
-        }
-
-        $ref = new \ReflectionClass($class);
-
-        if (!$ref->isSubclassOf(AbstractModel::class)) {
-            throw new Exception("relation class must be subclass of AbstractModel");
-        }
-
-        /** @var AbstractModel $ins */
-        $ins = $ref->newInstance();
-        $builder = new QueryBuilder();
-
-        if ($pk === null) {
-            $pk = $this->schemaInfo()->getPkFiledName();
-        }
-        if ($joinPk === null) {
-            $joinPk = $ins->schemaInfo()->getPkFiledName();
-        }
-
-        $targetTable = $ins->schemaInfo()->getTable();
-        $currentTable = $this->schemaInfo()->getTable();
-
-        // 支持复杂的构造
-        if ($where) {
-            /** @var QueryBuilder $builder */
-            $builder = call_user_func($where, $builder);
-            $this->preHandleQueryBuilder($builder);
-            $builder->getOne($targetTable, $builder->getField());
-        } else {
-            $targetTableAlias = "ES_INS";
-            // 关联表字段自动别名
-            $fields = $this->parserRelationFields($this, $ins, $targetTableAlias);
-
-            $builder->join($targetTable." AS {$targetTableAlias}", "{$targetTableAlias}.{$joinPk} = {$currentTable}.{$pk}", $joinType)
-                ->where("{$currentTable}.{$pk}", $this->$pk);
-            $this->preHandleQueryBuilder($builder);
-            $builder->getOne($currentTable, $fields);
-        }
-
-        $result = $this->query($builder);
-        if ($result) {
-            // 分离结果 两个数组
-            $targetData = [];
-            $originData = [];
-            foreach ($result[0] as $key => $value){
-                if (isset($targetTableAlias)) {
-                    // 如果有包含附属别名，则是targetData
-                    if (strpos($key, $targetTableAlias) !==  false){
-                        $trueKey = substr($key,strpos($key,$targetTableAlias."_")+ strlen($targetTableAlias) + 1);
-                        $targetData[$trueKey] = $value;
-                    }else{
-                        $originData[$key] = $value;
-                    }
-                }else{
-                    $targetData[$key] = $value;
-                }
-            }
-
-            $this->data($originData, false);
-            $ins->data($targetData, false);
-            $this->_joinData[$fileName] = $ins;
-
-            return $this->_joinData[$fileName];
-        }
-        return null;
-
-    }
-
-    /**
-     * 一对多关联
-     * @param string        $class
-     * @param callable|null $where
-     * @param null          $pk
-     * @param null          $joinPk
-     * @param string        $joinType
-     * @return mixed|null
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     * @throws \ReflectionException
-     * @throws \Throwable
-     */
-    protected function hasMany(string $class, callable $where = null, $pk = null, $joinPk = null, $joinType = '')
-    {
-        if ($this->preHandleWith === true){
-            return [$class, $where, $pk, $joinPk, $joinType, 'hasMany'];
-        }
-
-        $fileName = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2)[1]['function'];
-        if (isset($this->_joinData[$fileName])) {
-            return $this->_joinData[$fileName];
-        }
-
-        $ref = new \ReflectionClass($class);
-
-        if (!$ref->isSubclassOf(AbstractModel::class)) {
-            throw new Exception("relation class must be subclass of AbstractModel");
-        }
-
-        /** @var AbstractModel $ins */
-        $ins = $ref->newInstance();
-        $builder = new QueryBuilder();
-
-        if ($pk === null) {
-            $pk = $this->schemaInfo()->getPkFiledName();
-        }
-        if ($joinPk === null) {
-            $joinPk = $ins->schemaInfo()->getPkFiledName();
-        }
-
-        $targetTable = $ins->schemaInfo()->getTable();
-        $currentTable = $this->schemaInfo()->getTable();
-
-        // 支持复杂的构造
-        if ($where) {
-            /** @var QueryBuilder $builder */
-            $builder = call_user_func($where, $builder);
-            $this->preHandleQueryBuilder($builder);
-            $builder->get($targetTable, null, $builder->getField());
-        } else {
-            $targetTableAlias = "ES_INS";
-            // 关联表字段自动别名
-            $fields = $this->parserRelationFields($this, $ins, $targetTableAlias);
-
-            $builder->join($targetTable." AS {$targetTableAlias}", "{$targetTableAlias}.{$joinPk} = {$currentTable}.{$pk}", $joinType)
-                ->where("{$currentTable}.{$pk}", $this->$pk);
-            $this->preHandleQueryBuilder($builder);
-            $builder->get($currentTable, null, $fields);
-        }
-
-        $result = $this->query($builder);
-        if ($result) {
-            $return = [];
-            foreach ($result as $one) {
-                // 分离结果 两个数组
-                $targetData = [];
-                $originData = [];
-                foreach ($one as $key => $value){
-                    if(isset($targetTableAlias)){
-                        // 如果有包含附属别名，则是targetData
-                        if (strpos($key, $targetTableAlias) !==  false){
-                            $trueKey = substr($key,strpos($key,$targetTableAlias."_")+ strlen($targetTableAlias) + 1);
-                            $targetData[$trueKey] = $value;
-                        }else{
-                            $originData[$key] = $value;
-                        }
-                    }else{
-                        // callable $where 自行处理字段
-                        $targetData[$key] = $value;
-                    }
-                }
-                $return[] = ($ref->newInstance())->data($targetData);
-            }
-            $this->_joinData[$fileName] = $return;
-
-            return $this->_joinData[$fileName];
-        }
-        return null;
-    }
-
-    /**
-     * 关联查询 字段自动别名解析
-     * @param AbstractModel $model
-     * @param AbstractModel $ins
-     * @param string $insAlias
-     * @return array
-     * @throws Exception
-     */
-    protected function parserRelationFields($model, $ins, $insAlias)
-    {
-        $currentTable = $model->schemaInfo()->getTable();
-        $insFields = array_keys($ins->schemaInfo()->getColumns());
-        $fields    = [];
-        $fields[]  = "{$currentTable}.*";
-        foreach ($insFields as $field){
-            $fields[] = "{$insAlias}.{$field} AS {$insAlias}_{$field}";
-        }
-        return $fields;
-    }
-
-    /**
-     * @param QueryBuilder $builder
-     * @param bool $raw
-     * @return mixed
-     * @throws \Throwable
-     */
-    protected function query(QueryBuilder $builder, bool $raw = false)
-    {
-        $start = microtime(true);
-        $this->lastQuery = clone $builder;
-        if ($this->tempConnectionName) {
-            $connectionName = $this->tempConnectionName;
-        } else {
-            $connectionName = $this->connectionName;
-        }
-        try {
-            $ret = null;
-            if($this->client){
-                $ret = DbManager::getInstance()->query($builder, $raw, $this->client);
-            }else{
-                $ret = DbManager::getInstance()->query($builder, $raw, $connectionName);
-            }
-            $builder->reset();
-            $this->lastQueryResult = $ret;
-            return $ret->getResult();
-        } catch (\Throwable $throwable) {
-            throw $throwable;
-        } finally {
-            $this->reset();
-            if ($this->onQuery) {
-                $temp = clone $builder;
-                call_user_func($this->onQuery, $ret, $temp, $start);
-            }
-        }
-    }
-
-    /**
-     * 连贯操作预处理
-     * @param QueryBuilder $builder
-     * @throws Exception
-     * @throws \EasySwoole\Mysqli\Exception\Exception
-     */
-    private function preHandleQueryBuilder(QueryBuilder $builder)
-    {
-        // 快速连贯操作
-        if ($this->withTotalCount) {
+        if($this->runtimeConfig()->getWithTotalCount()){
             $builder->withTotalCount();
         }
-        if ($this->order && is_array($this->order)) {
-            foreach ($this->order as $order){
-                $builder->orderBy(...$order);
-            }
+        foreach ($this->runtimeConfig()->getOrder() as $order){
+            $builder->orderBy(...$order);
         }
-        if ($this->where) {
-            $whereModel = new static();
-            foreach ($this->where as $whereOne){
-                if (is_array($whereOne[0]) || is_int($whereOne[0])){
-                    $builder = PreProcess::mappingWhere($builder, $whereOne[0], $whereModel);
-                }else{
-                    $builder->where(...$whereOne);
-                }
-            }
-        }
-        if($this->group){
-            $builder->groupBy($this->group);
-        }
-        if($this->join){
-            foreach ($this->join as $joinOne) {
-                $builder->join($joinOne[0], $joinOne[1], $joinOne[2]);
-            }
-        }
-        // 如果在闭包里设置了属性，并且Model没设置，则覆盖Model里的
-        if ( $this->fields == '*' ){
-            $this->fields = implode(', ', $builder->getField());
+        foreach ($this->runtimeConfig()->getWhere() as $where){
+            $builder->where(...$where);
         }
 
-    }
-
-    /**
-     * @param $type
-     * @param null $field
-     * @return null|mixed
-     * @throws Exception
-     * @throws \Throwable
-     */
-    private function queryPolymerization($type, $field = null)
-    {
-        if ($field === null){
-            $field = $this->schemaInfo()->getPkFiledName();
+        foreach ($this->runtimeConfig()->getGroupBy() as $group){
+            $builder->groupBy($group);
         }
-        // 判断字段中是否带了表名，是否有`
-        if (strstr($field, '`') == false){
-            // 有表名
-            if (strstr($field, '.') !== false){
-                $temArray = explode(".", $field);
-                $field = "`{$temArray[0]}`.`{$temArray[1]}`";
-            }else{
-                if(!is_numeric($field)){
-                    $field = "`{$field}`";
-                }
-            }
+        foreach ($this->runtimeConfig()->getJoin() as $join){
+            $builder->join(...$join);
         }
-
-        $fields = "$type({$field})";
-        $this->fields = $fields;
-        $this->limit = 1;
-        $res = $this->all(null, true);
-
-        if (isset($res[0][$fields])){
-            return $res[0][$fields];
+        if($this->runtimeConfig()->getLimit()){
+            $builder->limit($this->runtimeConfig()->getLimit());
         }
-
-        return null;
-    }
-
-    /**
-     * 处理时间戳
-     * @param $data
-     * @param string $doType
-     * @return mixed
-     * @throws Exception
-     */
-    private function preHandleTimeStamp($data, $doType = 'insert')
-    {
-        if ($this->autoTimeStamp === false){
-            return $data;
-        }
-        $type = 'int';
-
-        if ( $this->autoTimeStamp === 'datetime'){
-            $type = 'datetime';
-        }
-
-        switch ($doType){
-            case 'insert':
-                if ($this->createTime !== false){
-                    $tem = $this->parseTimeStamp(time(), $type);
-                    $this->setAttr($this->createTime, $tem);
-                    $data[$this->createTime] = $tem;
-                }
-                if ($this->updateTime !== false){
-                    $tem = $this->parseTimeStamp(time(), $type);
-                    $this->setAttr($this->updateTime, $tem);
-                    $data[$this->updateTime] = $tem;
-                }
-                break;
-            case 'update':
-                if ($this->updateTime !== false){
-                    $tem = $this->parseTimeStamp(time(), $type);
-                    $this->setAttr($this->updateTime, $tem);
-                    $data[$this->updateTime] = $tem;
-                }
-                break;
-        }
-
-        return $data;
-    }
-
-    private function parseTimeStamp(int $timestamp, $type = 'int')
-    {
-        switch ($type){
-            case 'int':
-                return $timestamp;
-                break;
-            case 'datetime':
-                return date('Y-m-d H:i:s', $timestamp);
-                break;
-            default:
-                return date($type, $timestamp);
-                break;
-        }
-    }
-
-    // ================ 关联预查询  ======================
-    private function preHandleWith($data)
-    {
-        // $data 只有一条 直接foreach调用 $data->$with();
-        if ($data instanceof AbstractModel){// get查询使用
-            foreach ($this->with as $with){
-                $data->$with();
-            }
-            return $data;
-        }else if (is_array($data) && !empty($data)){// all查询使用
-            // $data 是多条，需要先提取主键数组，select 副表 where joinPk in (pk arrays);
-            // foreach 判断主键，设置值
-            foreach ($this->with as $with){
-                $data[0]->preHandleWith = true;
-                list($class, $where, $pk, $joinPk, $joinType, $withType) = $data[0]->$with();
-                if ($pk !== null && $joinPk !== null){
-                    $pks = array_map(function ($v) use ($pk){
-                        return $v->$pk;
-                    }, $data);
-                    /** @var AbstractModel $insClass */
-                    $insClass = new $class;
-                    $insData  = $insClass->where($joinPk, $pks, 'IN')->all();
-                    $temData  = [];
-                    foreach ($insData as $insK => $insV){
-                        if ($withType=='hasOne'){
-                            $temData[$insV[$pk]] = $insV;
-                        }else if($withType=='hasMany'){
-                            $temData[$insV[$pk]][] = $insV;
-                        }
-                    }
-                    foreach ($data as $model){
-                        if (isset($temData[$model[$pk]])){
-                            $model[$with] = $temData[$model[$pk]];
-                        }
-                    }
-                    $data[0]->preHandleWith = false;
-                } else {
-                    // 闭包的只能一个一个调用
-                    foreach ($data as $model){
-                        foreach ($this->with as $with){
-                            $model->$with();
-                        }
-                    }
-                }
-            }
-            return $data;
-        }
-        return $data;
-    }
-
-
-    public static function defer(float $timeout = null)
-    {
-        try {
-            $model = new static();
-        } catch (Exception $e) {
-            return null;
-        }
-        $connectionName = $model->connectionName;
-
-        return DbManager::getInstance()->getConnection($connectionName)->defer($timeout);
+        return $builder;
     }
 }

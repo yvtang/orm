@@ -1,5 +1,5 @@
 {
-    "name": "easyswoole/orm",
+    "name": "yvtang/orm",
     "type": "library",
     "description": "php stander lib",
     "keywords": [
@@ -12,8 +12,8 @@
     "license": "Apache-2.0",
     "authors": [
         {
-            "name": "YF",
-            "email": "291323003@qq.com"
+            "name": "DON",
+            "email": "qiuyutang@qq.com"
         }
     ],
     "require": {
@@ -21,9 +21,9 @@
         "ext-swoole": ">=4.4.7",
         "ext-json": "*",
         "easyswoole/component": "^2.0",
-        "easyswoole/mysqli": "^2.0",
-        "easyswoole/ddl": "^1.0",
-        "easyswoole/pool": "^1.0"
+        "easyswoole/mysqli": "^3.0",
+        "easyswoole/ddl": "2.x",
+        "easyswoole/pool": "^1.1"
     },
     "require-dev": {
         "easyswoole/phpunit": "^1.0",
