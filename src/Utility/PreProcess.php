@@ -16,15 +16,12 @@ class PreProcess
     {
         // 处理查询条件
         $primaryKey = $model->schemaInfo()->getPkFiledName();
-        if (is_int($whereVal)) {
+        if (is_int($whereVal) || is_string($whereVal)) {
             if (empty($primaryKey)) {
                 throw new Exception('Table not have primary key, so can\'t use Model::get($pk)');
             } else {
                 $builder->where($primaryKey, $whereVal);
             }
-        } else if (is_string($whereVal)) {
-            $whereKeys = explode(',', $whereVal);
-            $builder->where($primaryKey, $whereKeys, 'IN');
         } else if (is_array($whereVal)) {
             // 如果不相等说明是一个键值数组 需要批量操作where
             if (array_keys($whereVal) !== range(0, count($whereVal) - 1)) {
@@ -73,7 +70,7 @@ class PreProcess
      */
     public static function dataValueFormat($data, Column $column)
     {
-        if (DataType::typeIsTextual($column->getColumnType())) {
+        if (DataType::typeIsTextual($column->getColumnType()) && $data !== null) {
             return strval($data);
         } else {
             return $data;

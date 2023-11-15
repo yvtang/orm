@@ -17,22 +17,24 @@ class Cursor implements CursorInterface
 {
     protected $statement;
     protected $modelName;
-    protected $returnAsArray;
+    protected $returnAsArray = false;
 
     public function __construct(Statement $statement)
     {
         $this->statement = $statement;
     }
 
-    public function setReturnAsArray(bool $returnAsArray)
-    {
-        $this->returnAsArray = $returnAsArray;
-    }
 
     public function setModelName(string $modelName)
     {
         $this->modelName = $modelName;
     }
+
+    public function setReturnAsArray(bool $returnAsArray): void
+    {
+        $this->returnAsArray = $returnAsArray;
+    }
+
 
     /**
      * @return mixed

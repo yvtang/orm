@@ -11,11 +11,13 @@ class Config extends \EasySwoole\Pool\Config
     protected $password;
     protected $database;
     protected $port = 3306;
-    protected $timeout = 30;
+    protected $timeout = 45;
     protected $charset = 'utf8';
+    protected $autoPing = 5;
 
     protected $strict_type = false; // 开启严格模式，返回的字段将自动转为数字类型
     protected $fetch_mode = false;
+    protected $returnCollection = false; // 返回结果为结果集
 
     /**
      * @return mixed
@@ -31,8 +33,14 @@ class Config extends \EasySwoole\Pool\Config
      */
     public function setHost($host): Config
     {
-        $this->host = $host;
-        return $this;
+        $index = strpos($host, ':');
+        if($index === false){
+            $this->host = $host;
+        }else{
+            $this->host = substr($host, 0, $index);
+            $this->port = intval(substr($host, $index + 1));
+        }
+        return $this;        
     }
 
     /**
@@ -144,6 +152,22 @@ class Config extends \EasySwoole\Pool\Config
     }
 
     /**
+     * @return int
+     */
+    public function getAutoPing(): int
+    {
+        return $this->autoPing;
+    }
+
+    /**
+     * @param int $autoPing
+     */
+    public function setAutoPing(int $autoPing): void
+    {
+        $this->autoPing = $autoPing;
+    }
+
+    /**
      * @return bool
      */
     public function isStrictType(): bool
@@ -178,4 +202,21 @@ class Config extends \EasySwoole\Pool\Config
         $this->fetch_mode = $fetch_mode;
         return $this;
     }
+
+    /**
+     * @return bool
+     */
+    public function isReturnCollection(): bool
+    {
+        return $this->returnCollection;
+    }
+
+    /**
+     * @param bool $returnCollection
+     */
+    public function setReturnCollection(bool $returnCollection): void
+    {
+        $this->returnCollection = $returnCollection;
+    }
+
 }

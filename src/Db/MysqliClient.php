@@ -9,11 +9,19 @@ use EasySwoole\Mysqli\QueryBuilder;
 use EasySwoole\ORM\Exception\Exception;
 use EasySwoole\Pool\ObjectInterface;
 
-class MysqliClient extends Client implements ClientInterface,ObjectInterface
+class MysqliClient extends Client implements ClientInterface, ObjectInterface
 {
 
-    protected $lastQuery;
-    protected $lastQueryResult;
+    private $name;
+
+    public function connectionName(?string $name = null): ?string
+    {
+        if($name !== null){
+            $this->name = $name;
+        }
+        return $this->name;
+    }
+
 
     public function query(QueryBuilder $builder, bool $rawQuery = false): Result
     {
@@ -22,31 +30,31 @@ class MysqliClient extends Client implements ClientInterface,ObjectInterface
         $errno = 0;
         $error = '';
         $stmt = null;
-        try{
-            if($rawQuery){
-                $ret = $this->rawQuery($builder->getLastQuery(),$this->config->getTimeout());
-            }else{
-                $stmt = $this->mysqlClient()->prepare($builder->getLastPrepareQuery(),$this->config->getTimeout());
-                if($stmt){
-                    $ret = $stmt->execute($builder->getLastBindParams(),$this->config->getTimeout());
-                }else{
+        try {
+            if ($rawQuery) {
+                $ret = $this->rawQuery($builder->getLastQuery(), $this->config->getTimeout());
+            } else {
+                $stmt = $this->mysqlClient()->prepare($builder->getLastPrepareQuery(), $this->config->getTimeout());
+                if ($stmt) {
+                    $ret = $stmt->execute($builder->getLastBindParams(), $this->config->getTimeout());
+                } else {
                     $ret = false;
                 }
             }
 
             $errno = $this->mysqlClient()->errno;
             $error = $this->mysqlClient()->error;
-            $insert_id     = $this->mysqlClient()->insert_id;
+            $insert_id = $this->mysqlClient()->insert_id;
             $affected_rows = $this->mysqlClient()->affected_rows;
             /*
              * 重置mysqli客户端成员属性，避免下次使用
              */
             $this->mysqlClient()->errno = 0;
             $this->mysqlClient()->error = '';
-            $this->mysqlClient()->insert_id     = 0;
+            $this->mysqlClient()->insert_id = 0;
             $this->mysqlClient()->affected_rows = 0;
             //结果设置
-            if (!$rawQuery && $ret && $this->config->isFetchMode()){
+            if (!$rawQuery && $ret && $this->config->isFetchMode()) {
                 $result->setResult(new Cursor($stmt));
             } else {
                 $result->setResult($ret);
@@ -55,22 +63,22 @@ class MysqliClient extends Client implements ClientInterface,ObjectInterface
             $result->setLastErrorNo($errno);
             $result->setLastInsertId($insert_id);
             $result->setAffectedRows($affected_rows);
-
-            $this->lastQueryResult = $result;
-            $this->lastQuery       = $builder;
-        }catch (\Throwable $throwable){
+        } catch (\Throwable $throwable) {
             throw $throwable;
-        }finally{
-            if($errno){
-                /*
-                    * 断线的时候回收链接
-                */
-                if(in_array($errno,[2006,2013])){
+        } finally {
+            if ($errno) {
+
+                /**
+                 * 断线收回链接
+                 */
+                if (in_array($errno, [2006, 2013])) {
                     $this->close();
                 }
-                throw new Exception($error);
-            }
 
+                $exception = new Exception($error . " [{$builder->getLastQuery()}]");
+                $exception->setLastQueryResult($result);
+                throw $exception;
+            }
         }
         return $result;
     }
@@ -82,30 +90,11 @@ class MysqliClient extends Client implements ClientInterface,ObjectInterface
 
     function objectRestore()
     {
-        // TODO: Implement objectRestore() method.
+        $this->reset();
     }
 
     function beforeUse(): ?bool
     {
         return $this->connect();
     }
-
-    /**
-     * 最后的sql构造
-     * @return mixed
-     */
-    public function lastQuery():? QueryBuilder
-    {
-        return $this->lastQuery;
-    }
-
-    /**
-     * 最后的查询结果
-     * @return mixed
-     */
-    public function lastQueryResult():? Result
-    {
-        return $this->lastQueryResult;
-    }
-
 }
