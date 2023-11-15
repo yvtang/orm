@@ -1,5 +1,5 @@
 {
-    "name": "easyswoole/orm",
+    "name": "yvtang/orm",
     "type": "library",
     "description": "php stander lib",
     "keywords": [
@@ -12,8 +12,8 @@
     "license": "Apache-2.0",
     "authors": [
         {
-            "name": "YF",
-            "email": "291323003@qq.com"
+            "name": "DON",
+            "email": "qiuyutang@qq.com"
         }
     ],
     "require": {

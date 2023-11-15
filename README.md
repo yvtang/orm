@@ -1,10 +1,10 @@
-Easyswoole-ORM
+Yvtang-ORM
 
 ## 项目背景
 
 由于swoole协程环境不可以直接使用php-fpm的orm组件（由于存在静态全局变量、连接层没有做好协程处理，无法协程安全地使用）
 
-所以easyswoole花费大量时间精力维护orm组件，连贯操作等功能设计借鉴TP5.0的ORM组件。
+参考easyswoole的orm组件，连贯操作等功能设计借鉴TP5.0的ORM组件。
 
 有疑问、功能建议、bug反馈请在QQ群、github issue、直接联系宣言提交。
 
@@ -19,7 +19,7 @@ Easyswoole-ORM
 ## 安装
 
 ```
-composer require easyswoole/orm
+composer require yvtang/orm
 ```
 
 ## RFC
@@ -64,7 +64,7 @@ $model->where($array1)->where($array2)->get()
 
 ## 官网文档
 
-http://www.easyswoole.com/Cn/Components/Orm/changeLog.html
+https://www.easyswoole.com/Components/Orm/install.html
 
 ## 单元测试
 
@@ -98,7 +98,3 @@ Apache-2.0
 - 支持关联查询。
 - 支持多数据库配置，读写分离。
 - 便捷的连贯操作、聚合操作。
-
-## 设计层级
-
-![设计层级](http://www.easyswoole.com/Images/Orm/%E8%AE%BE%E8%AE%A1%E5%B1%82%E7%BA%A7.svg)
